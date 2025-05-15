@@ -15,9 +15,9 @@ const fs = require("fs");
 const url = require("url");
 const path = require("path");
 const puppeteer = require("puppeteer");
-const SEOAIOptimizer = require('./seo-ai-optimizer');
-const config = require('./config');
-require('dotenv').config();
+const SEOAIOptimizer = require("./seo-ai-optimizer");
+const config = require("./config");
+require("dotenv").config();
 
 class SEOAnalyzer {
    constructor(startUrl, openaiApiKey) {
@@ -64,7 +64,6 @@ class SEOAnalyzer {
    }
 
    shouldCrawl(url) {
-      // Ignoruj pliki statyczne i inne zasoby nieprzydatne do crawlowania
       const ignoreExtensions = [
          ".jpg",
          ".jpeg",
@@ -81,10 +80,12 @@ class SEOAnalyzer {
          ".woff",
          ".woff2",
          ".ttf",
-         ".eot"
+         ".eot",
       ];
-      
-      const isStaticResource = ignoreExtensions.some((ext) => url.toLowerCase().endsWith(ext));
+
+      const isStaticResource = ignoreExtensions.some((ext) =>
+         url.toLowerCase().endsWith(ext)
+      );
       if (isStaticResource) {
          this.staticResources.add(url);
          return false;
@@ -134,16 +135,17 @@ class SEOAnalyzer {
          this.pagesDescriptions.set(url, description);
          // Sprawdź długość opisu
          if (description.length < 120 || description.length > 160) {
-            this.pagesDescriptionsWarnings = this.pagesDescriptionsWarnings || new Map();
+            this.pagesDescriptionsWarnings =
+               this.pagesDescriptionsWarnings || new Map();
             this.pagesDescriptionsWarnings.set(url, description.length);
          }
       }
 
       // Pobierz wszystkie meta tagi
       const metaTags = {};
-      $('meta').each((_, element) => {
-         const name = $(element).attr('name') || $(element).attr('property');
-         const content = $(element).attr('content');
+      $("meta").each((_, element) => {
+         const name = $(element).attr("name") || $(element).attr("property");
+         const content = $(element).attr("content");
          if (name && content) {
             metaTags[name] = content;
          }
@@ -161,18 +163,20 @@ class SEOAnalyzer {
       if (title || description) {
          try {
             const pageData = {
-               title: title || '',
-               description: description || '',
-               keywords: Array.from(this.keywords)
+               title: title || "",
+               description: description || "",
+               keywords: Array.from(this.keywords),
             };
 
-            const optimizedData = await this.aiOptimizer.optimizeMetaTags(pageData);
-            
+            const optimizedData = await this.aiOptimizer.optimizeMetaTags(
+               pageData
+            );
+
             // Dodaj sugestie optymalizacji do raportu
             this.pagesMetaTags.get(url).aiSuggestions = {
                optimizedTitle: optimizedData.title,
                optimizedDescription: optimizedData.description,
-               keywordSuggestions: optimizedData.suggestions
+               keywordSuggestions: optimizedData.suggestions,
             };
          } catch (error) {
             console.error(`Błąd podczas optymalizacji AI dla ${url}:`, error);
@@ -219,6 +223,87 @@ class SEOAnalyzer {
       return links;
    }
 
+   async extractContent($) {
+      // Usuń skrypty, style i komentarze
+      $("script, style, comment").remove();
+
+      // Pobierz tekst z głównych sekcji
+      const content = {
+         title: $("title").text().trim(),
+         h1: $("h1")
+            .map((_, el) => $(el).text().trim())
+            .get(),
+         h2: $("h2")
+            .map((_, el) => $(el).text().trim())
+            .get(),
+         h3: $("h3")
+            .map((_, el) => $(el).text().trim())
+            .get(),
+         paragraphs: $("p")
+            .map((_, el) => $(el).text().trim())
+            .get(),
+         lists: $("ul, ol")
+            .map((_, el) => $(el).text().trim())
+            .get(),
+         metaDescription: $('meta[name="description"]').attr("content") || "",
+         metaKeywords: $('meta[name="keywords"]').attr("content") || "",
+      };
+
+      return content;
+   }
+
+   async analyzePage(url, $) {
+      try {
+         const content = await this.extractContent($);
+         if (!content) {
+            console.error(`Nie udało się wyodrębnić treści dla ${url}`);
+            return null;
+         }
+
+         const pageAnalysis = await this.aiOptimizer.analyzePageContent(
+            JSON.stringify(content),
+            url
+         );
+         if (!pageAnalysis) {
+            console.error(`Nie udało się przeanalizować treści dla ${url}`);
+            return null;
+         }
+
+         // Upewnij się, że metaTags istnieje
+         if (!this.pagesMetaTags.has(url)) {
+            this.pagesMetaTags.set(url, {});
+         }
+
+         // Dodaj analizę do raportu
+         const metaTags = this.pagesMetaTags.get(url);
+         metaTags.contentAnalysis = pageAnalysis;
+         this.pagesMetaTags.set(url, metaTags);
+
+         // Aktualizuj słowa kluczowe na podstawie analizy AI
+         if (
+            pageAnalysis.mainKeywords &&
+            Array.isArray(pageAnalysis.mainKeywords)
+         ) {
+            pageAnalysis.mainKeywords.forEach((keyword) =>
+               this.keywords.add(keyword)
+            );
+         }
+         if (
+            pageAnalysis.longTailKeywords &&
+            Array.isArray(pageAnalysis.longTailKeywords)
+         ) {
+            pageAnalysis.longTailKeywords.forEach((keyword) =>
+               this.keywords.add(keyword)
+            );
+         }
+
+         return pageAnalysis;
+      } catch (error) {
+         console.error(`Błąd podczas analizy strony ${url}:`, error);
+         return null;
+      }
+   }
+
    async crawl(url, depth = 0, maxDepth = 10) {
       if (
          depth > maxDepth ||
@@ -235,7 +320,14 @@ class SEOAnalyzer {
       if (status !== 200 || !html) return;
 
       const $ = cheerio.load(html);
+
+      // Najpierw analizujemy treść strony przez AI
+      await this.analyzePage(url, $);
+
+      // Następnie pobieramy metadane
       await this.extractMetadata($, url);
+
+      // Na końcu zbieramy linki
       const links = this.extractLinks($, url);
 
       for (const link of links) {
@@ -347,6 +439,7 @@ class SEOAnalyzer {
       const report = {
          baseUrl: this.baseUrl,
          dateGenerated: new Date().toISOString(),
+         issues: [],
          crawlStats: {
             totalUrlsCrawled: this.visitedUrls.size,
             totalStaticResources: this.staticResources.size,
@@ -362,8 +455,12 @@ class SEOAnalyzer {
             urlsWithoutH1: [...this.visitedUrls].filter(
                (url) => !this.pagesH1.has(url)
             ),
-            urlsWithInvalidTitleLength: this.pagesTitlesWarnings ? [...this.pagesTitlesWarnings.entries()] : [],
-            urlsWithInvalidDescriptionLength: this.pagesDescriptionsWarnings ? [...this.pagesDescriptionsWarnings.entries()] : [],
+            urlsWithInvalidTitleLength: this.pagesTitlesWarnings
+               ? [...this.pagesTitlesWarnings.entries()]
+               : [],
+            urlsWithInvalidDescriptionLength: this.pagesDescriptionsWarnings
+               ? [...this.pagesDescriptionsWarnings.entries()]
+               : [],
          },
          sitemapStats: {
             totalUrlsInSitemap: this.sitemapUrls.size,
@@ -383,11 +480,11 @@ class SEOAnalyzer {
             externalLinksCount: (this.externalLinks.get(url) || []).length,
             metaTags: this.pagesMetaTags?.get(url) || {},
          })),
-         staticResources: [...this.staticResources].map(url => ({
+         staticResources: [...this.staticResources].map((url) => ({
             url,
-            type: url.split('.').pop().toLowerCase(),
-            status: this.statusCodes.get(url) || "unknown"
-         }))
+            type: url.split(".").pop().toLowerCase(),
+            status: this.statusCodes.get(url) || "unknown",
+         })),
       };
 
       const reportJson = JSON.stringify(report, null, 2);
@@ -401,175 +498,417 @@ class SEOAnalyzer {
 
    analyzeKeywords(text) {
       if (!text) return { found: [], missing: [] };
-      
+
       const textLower = text.toLowerCase();
       const found = [];
       const missing = [];
-      
-      this.keywords.forEach(keyword => {
+
+      this.keywords.forEach((keyword) => {
          if (textLower.includes(keyword.toLowerCase())) {
             found.push(keyword);
          } else {
             missing.push(keyword);
          }
       });
-      
+
       return { found, missing };
    }
 
    generateHtmlReport(report) {
-      const title = `Raport SEO dla ${report.baseUrl}`;
       const htmlReport = `
 <!DOCTYPE html>
-<html lang="pl">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title}</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #333; }
-    .container { max-width: 1200px; margin: 0 auto; }
-    h1 { color: #2c3e50; }
-    h2 { color: #3498db; margin-top: 30px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-    th { background-color: #f2f2f2; position: sticky; top: 0; }
-    tr:hover { background-color: #f5f5f5; }
-    .error { color: #e74c3c; }
-    .warning { color: #f39c12; }
-    .success { color: #27ae60; }
-    .summary { background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-    .issues ul { margin-top: 5px; }
-    .section { margin-bottom: 40px; }
-    .keywords { font-size: 0.9em; }
-    .keywords .found { color: #27ae60; }
-    .keywords .missing { color: #e74c3c; }
-    .length-warning { color: #e74c3c; }
-    .length-ok { color: #27ae60; }
-    .page-details { margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; }
-    .page-details h3 { margin-top: 0; color: #2c3e50; }
-    .page-details p { margin: 5px 0; }
-    .table-container { overflow-x: auto; }
-    .ai-suggestions { 
-      background-color: #e8f4f8; 
-      padding: 10px; 
-      margin-top: 10px; 
-      border-radius: 5px; 
-    }
-    .ai-suggestions h4 { 
-      color: #2980b9; 
-      margin: 0 0 10px 0; 
-    }
-    .ai-suggestions ul { 
-      margin: 0; 
-      padding-left: 20px; 
-    }
-  </style>
+   <meta charset="UTF-8">
+   <title>Raport SEO</title>
+   <style>
+      body {
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+         line-height: 1.6;
+         color: #333;
+         max-width: 1200px;
+         margin: 0 auto;
+         padding: 20px;
+         background: #f5f5f5;
+      }
+      .container {
+         background: white;
+         border-radius: 8px;
+         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+         padding: 20px;
+      }
+      .summary {
+         margin-bottom: 30px;
+         padding: 20px;
+         background: #f8f9fa;
+         border-radius: 8px;
+      }
+      .summary h2 {
+         margin-top: 0;
+         color: #2c3e50;
+      }
+      .stats {
+         display: flex;
+         flex-wrap: wrap;
+         gap: 20px;
+         margin: 15px 0;
+      }
+      .stat-item {
+         background: white;
+         padding: 15px;
+         border-radius: 6px;
+         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+         flex: 1;
+         min-width: 200px;
+      }
+      .stat-label {
+         font-size: 0.9em;
+         color: #666;
+         margin-bottom: 5px;
+      }
+      .stat-value {
+         font-size: 1.2em;
+         font-weight: 500;
+         color: #2c3e50;
+      }
+      .page-analysis {
+         background: white;
+         border-radius: 8px;
+         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+         margin-bottom: 30px;
+         overflow: hidden;
+      }
+      .page-header {
+         background: #f8f9fa;
+         padding: 15px 20px;
+         border-bottom: 1px solid #eee;
+         display: flex;
+         justify-content: space-between;
+         align-items: center;
+      }
+      .page-url {
+         font-weight: 500;
+         color: #2c3e50;
+         word-break: break-all;
+      }
+      .page-status {
+         padding: 4px 8px;
+         border-radius: 4px;
+         font-size: 0.9em;
+      }
+      .success {
+         background: #d4edda;
+         color: #155724;
+      }
+      .error {
+         background: #f8d7da;
+         color: #721c24;
+      }
+      .meta-section {
+         padding: 20px;
+         border-bottom: 1px solid #eee;
+      }
+      .meta-section:last-child {
+         border-bottom: none;
+      }
+      .meta-title {
+         font-size: 1.1em;
+         font-weight: 500;
+         color: #2c3e50;
+         margin-bottom: 10px;
+      }
+      .keywords {
+         margin: 10px 0;
+         font-size: 0.9em;
+         color: #666;
+      }
+      .length-ok {
+         color: #28a745;
+      }
+      .length-warning {
+         color: #dc3545;
+      }
+      .warning {
+         color: #dc3545;
+         font-weight: 500;
+      }
+      .ai-suggestions {
+         margin-top: 15px;
+         padding: 15px;
+         background: #e8f4f8;
+         border-radius: 6px;
+      }
+      .ai-suggestions h4 {
+         margin: 0 0 10px 0;
+         color: #2c3e50;
+      }
+      .ai-suggestions ul {
+         margin: 0;
+         padding-left: 20px;
+      }
+      .ai-suggestions li {
+         margin-bottom: 5px;
+      }
+      .issues {
+         margin: 20px 0;
+         padding: 15px;
+         background: #fff3cd;
+         border-radius: 6px;
+      }
+      .issues h3 {
+         margin: 0 0 10px 0;
+         color: #856404;
+      }
+      .issues ul {
+         margin: 0;
+         padding-left: 20px;
+      }
+      .issues li {
+         margin-bottom: 5px;
+         color: #856404;
+      }
+      @media (max-width: 768px) {
+         .stats {
+            flex-direction: column;
+         }
+         .stat-item {
+            width: 100%;
+         }
+      }
+   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>${title}</h1>
-    <p>Raport wygenerowany: ${new Date().toLocaleString()}</p>
-    
-    <div class="summary">
-      <h2>Podsumowanie</h2>
-      <p>Przeanalizowano <strong>${report.crawlStats.totalUrlsCrawled}</strong> stron.</p>
-      <p>Znaleziono <strong>${report.crawlStats.totalStaticResources}</strong> zasobów statycznych.</p>
-      <p>W pliku sitemap.xml znaleziono <strong>${report.sitemapStats.totalUrlsInSitemap}</strong> adresów URL.</p>
-      <p class="${report.crawlStats.brokenLinks > 0 ? "error" : "success"}">
-        Znaleziono <strong>${report.crawlStats.brokenLinks}</strong> uszkodzonych linków.
-      </p>
-    </div>
-    
-    <div class="issues">
-      <h2>Problemy</h2>
-      <ul>
-        ${report.crawlStats.brokenLinks > 0 ? `<li class="error">Uszkodzone linki: ${report.crawlStats.brokenLinks}</li>` : ""}
-        ${report.crawlStats.urlsWithoutTitle.length > 0 ? `<li class="warning">Strony bez tytułu: ${report.crawlStats.urlsWithoutTitle.length}</li>` : ""}
-        ${report.crawlStats.urlsWithoutDescription.length > 0 ? `<li class="warning">Strony bez opisu: ${report.crawlStats.urlsWithoutDescription.length}</li>` : ""}
-        ${report.crawlStats.urlsWithoutH1.length > 0 ? `<li class="warning">Strony bez nagłówka H1: ${report.crawlStats.urlsWithoutH1.length}</li>` : ""}
-        ${report.sitemapStats.urlsNotInSitemap.length > 0 ? `<li class="warning">Strony brakujące w sitemap: ${report.sitemapStats.urlsNotInSitemap.length}</li>` : ""}
-      </ul>
-    </div>
-    
-    <div class="section">
-      <h2>Analiza stron</h2>
-      <div class="table-container">
-        <table>
-          <tr>
-            <th>URL</th>
-            <th>Status</th>
-            <th>Tytuł</th>
-            <th>Długość tytułu</th>
-            <th>Opis</th>
-            <th>Długość opisu</th>
-            <th>Linki wewnętrzne</th>
-            <th>Linki zewnętrzne</th>
-          </tr>
-          ${report.pageMeta
-            .map(page => {
-              const titleKeywords = this.analyzeKeywords(page.title);
-              const descKeywords = this.analyzeKeywords(page.description);
-              const titleLengthClass = page.titleLength >= 30 && page.titleLength <= 60 ? "length-ok" : "length-warning";
-              const descLengthClass = page.descriptionLength >= 120 && page.descriptionLength <= 160 ? "length-ok" : "length-warning";
-              const aiSuggestions = page.metaTags?.aiSuggestions;
-              
-              return `
-          <tr>
-            <td>${page.url}</td>
-            <td class="${page.status === 200 ? "success" : "error"}">${page.status}</td>
-            <td>
-              ${page.title || '<span class="warning">Brak</span>'}
-              <div class="keywords">
-                <span class="found">Znalezione: ${titleKeywords.found.join(", ")}</span>
-                ${titleKeywords.missing.length > 0 ? `<br><span class="missing">Brakuje: ${titleKeywords.missing.slice(0, 3).join(", ")}${titleKeywords.missing.length > 3 ? "..." : ""}</span>` : ""}
-              </div>
-              ${aiSuggestions ? `
-              <div class="ai-suggestions">
-                <h4>Sugestie AI:</h4>
-                <p><strong>Zoptymalizowany tytuł:</strong> ${aiSuggestions.optimizedTitle}</p>
-                <p><strong>Dodatkowe słowa kluczowe:</strong></p>
-                <ul>
-                  ${aiSuggestions.keywordSuggestions.slice(0, 5).map(k => `<li>${k}</li>`).join('')}
-                </ul>
-              </div>
-              ` : ''}
-            </td>
-            <td class="${titleLengthClass}">${page.titleLength}</td>
-            <td>
-              ${page.description || '<span class="warning">Brak</span>'}
-              <div class="keywords">
-                <span class="found">Znalezione: ${descKeywords.found.join(", ")}</span>
-                ${descKeywords.missing.length > 0 ? `<br><span class="missing">Brakuje: ${descKeywords.missing.slice(0, 3).join(", ")}${descKeywords.missing.length > 3 ? "..." : ""}</span>` : ""}
-              </div>
-              ${aiSuggestions ? `
-              <div class="ai-suggestions">
-                <h4>Sugestie AI:</h4>
-                <p><strong>Zoptymalizowany opis:</strong> ${aiSuggestions.optimizedDescription}</p>
-              </div>
-              ` : ''}
-            </td>
-            <td class="${descLengthClass}">${page.descriptionLength}</td>
-            <td>${page.internalLinksCount}</td>
-            <td>${page.externalLinksCount}</td>
-          </tr>
-          <tr>
-            <td colspan="8">
-              <div class="page-details">
-                <h3>Szczegółowa analiza</h3>
-                <p><strong>Długość tytułu:</strong> <span class="${titleLengthClass}">${page.titleLength} znaków</span> ${page.titleLength < 30 ? "(za krótki)" : page.titleLength > 60 ? "(za długi)" : "(optymalna)"}</p>
-                <p><strong>Długość opisu:</strong> <span class="${descLengthClass}">${page.descriptionLength} znaków</span> ${page.descriptionLength < 120 ? "(za krótki)" : page.descriptionLength > 160 ? "(za długi)" : "(optymalna)"}</p>
-                <p><strong>Słowa kluczowe w tytule:</strong> ${titleKeywords.found.length}/${this.keywords.size} (${Math.round(titleKeywords.found.length/this.keywords.size*100)}%)</p>
-                <p><strong>Słowa kluczowe w opisie:</strong> ${descKeywords.found.length}/${this.keywords.size} (${Math.round(descKeywords.found.length/this.keywords.size*100)}%)</p>
-              </div>
-            </td>
-          </tr>`;
-            })
-            .join("")}
-        </table>
+   <div class="container">
+      <h1>Raport SEO</h1>
+      
+      <div class="summary">
+         <h2>Podsumowanie</h2>
+         <div class="stats">
+            <div class="stat-item">
+               <div class="stat-label">Liczba przeanalizowanych stron</div>
+               <div class="stat-value">${report.pageMeta.length}</div>
+            </div>
+            <div class="stat-item">
+               <div class="stat-label">Średnia długość tytułu</div>
+               <div class="stat-value">${Math.round(
+                  report.pageMeta.reduce(
+                     (acc, page) => acc + page.titleLength,
+                     0
+                  ) / report.pageMeta.length
+               )} znaków</div>
+            </div>
+            <div class="stat-item">
+               <div class="stat-label">Średnia długość opisu</div>
+               <div class="stat-value">${Math.round(
+                  report.pageMeta.reduce(
+                     (acc, page) => acc + page.descriptionLength,
+                     0
+                  ) / report.pageMeta.length
+               )} znaków</div>
+            </div>
+         </div>
       </div>
-    </div>
-  </div>
+
+      ${
+         report.issues && report.issues.length > 0
+            ? `
+      <div class="issues">
+         <h3>Wykryte problemy</h3>
+         <ul>
+            ${report.issues.map((issue) => `<li>${issue}</li>`).join("")}
+         </ul>
+      </div>
+      `
+            : ""
+      }
+
+      ${report.pageMeta
+         .map((page) => {
+            const titleKeywords = this.analyzeKeywords(page.title);
+            const descKeywords = this.analyzeKeywords(page.description);
+            const titleLengthClass =
+               page.titleLength >= 30 && page.titleLength <= 60
+                  ? "length-ok"
+                  : "length-warning";
+            const descLengthClass =
+               page.descriptionLength >= 120 && page.descriptionLength <= 160
+                  ? "length-ok"
+                  : "length-warning";
+            const aiSuggestions = page.metaTags?.aiSuggestions;
+            const contentAnalysis = page.metaTags?.contentAnalysis;
+
+            return `
+         <div class="page-analysis">
+            <div class="page-header">
+               <div class="page-url">${page.url}</div>
+               <span class="page-status ${
+                  page.status === 200 ? "success" : "error"
+               }">Status: ${page.status}</span>
+            </div>
+
+            ${
+               contentAnalysis
+                  ? `
+            <div class="meta-section">
+               <div class="meta-title">Analiza treści AI</div>
+               <div class="stats">
+                  <div class="stat-item">
+                     <div class="meta-title">Główne słowa kluczowe</div>
+                     <ul>
+                        ${contentAnalysis.mainKeywords
+                           .map((k) => `<li>${k}</li>`)
+                           .join("")}
+                     </ul>
+                  </div>
+                  <div class="stat-item">
+                     <div class="meta-title">Słowa kluczowe długiego ogona</div>
+                     <ul>
+                        ${contentAnalysis.longTailKeywords
+                           .map((k) => `<li>${k}</li>`)
+                           .join("")}
+                     </ul>
+                  </div>
+               </div>
+               <div class="stats">
+                  <div class="stat-item">
+                     <div class="meta-title">Powiązane tematy</div>
+                     <ul>
+                        ${contentAnalysis.relatedTopics
+                           .map((t) => `<li>${t}</li>`)
+                           .join("")}
+                     </ul>
+                  </div>
+               </div>
+               <div class="ai-suggestions">
+                  <h4>Sugestie struktury treści</h4>
+                  <ul>
+                     ${contentAnalysis.contentStructure
+                        .map((s) => `<li>${s}</li>`)
+                        .join("")}
+                  </ul>
+                  <h4>Sugestie SEO</h4>
+                  <ul>
+                     ${contentAnalysis.seoSuggestions
+                        .map((s) => `<li>${s}</li>`)
+                        .join("")}
+                  </ul>
+               </div>
+            </div>
+            `
+                  : ""
+            }
+
+            <div class="meta-section">
+               <div class="meta-title">Tytuł strony</div>
+               <div>${
+                  page.title || '<span class="warning">Brak tytułu</span>'
+               }</div>
+               <div class="keywords">
+                  <div>Znalezione słowa kluczowe: ${
+                     titleKeywords.found.join(", ") || "brak"
+                  }</div>
+                  ${
+                     titleKeywords.missing.length > 0
+                        ? `<div>Brakujące słowa kluczowe: ${titleKeywords.missing
+                             .slice(0, 3)
+                             .join(", ")}${
+                             titleKeywords.missing.length > 3 ? "..." : ""
+                          }</div>`
+                        : ""
+                  }
+               </div>
+               <div class="stats">
+                  <div class="stat-item">
+                     <div class="stat-label">Długość tytułu</div>
+                     <div class="stat-value ${titleLengthClass}">${
+               page.titleLength
+            } znaków</div>
+                  </div>
+                  <div class="stat-item">
+                     <div class="stat-label">Słowa kluczowe w tytule</div>
+                     <div class="stat-value">${titleKeywords.found.length}/${
+               this.keywords.size
+            } (${Math.round(
+               (titleKeywords.found.length / this.keywords.size) * 100
+            )}%)</div>
+                  </div>
+               </div>
+               ${
+                  aiSuggestions
+                     ? `
+               <div class="ai-suggestions">
+                  <h4>Sugestie AI</h4>
+                  <p><strong>Zoptymalizowany tytuł:</strong> ${aiSuggestions.optimizedTitle}</p>
+               </div>
+               `
+                     : ""
+               }
+            </div>
+
+            <div class="meta-section">
+               <div class="meta-title">Meta opis</div>
+               <div>${
+                  page.description || '<span class="warning">Brak opisu</span>'
+               }</div>
+               <div class="keywords">
+                  <div>Znalezione słowa kluczowe: ${
+                     descKeywords.found.join(", ") || "brak"
+                  }</div>
+                  ${
+                     descKeywords.missing.length > 0
+                        ? `<div>Brakujące słowa kluczowe: ${descKeywords.missing
+                             .slice(0, 3)
+                             .join(", ")}${
+                             descKeywords.missing.length > 3 ? "..." : ""
+                          }</div>`
+                        : ""
+                  }
+               </div>
+               <div class="stats">
+                  <div class="stat-item">
+                     <div class="stat-label">Długość opisu</div>
+                     <div class="stat-value ${descLengthClass}">${
+               page.descriptionLength
+            } znaków</div>
+                  </div>
+                  <div class="stat-item">
+                     <div class="stat-label">Słowa kluczowe w opisie</div>
+                     <div class="stat-value">${descKeywords.found.length}/${
+               this.keywords.size
+            } (${Math.round(
+               (descKeywords.found.length / this.keywords.size) * 100
+            )}%)</div>
+                  </div>
+               </div>
+               ${
+                  aiSuggestions
+                     ? `
+               <div class="ai-suggestions">
+                  <h4>Sugestie AI</h4>
+                  <p><strong>Zoptymalizowany opis:</strong> ${aiSuggestions.optimizedDescription}</p>
+               </div>
+               `
+                     : ""
+               }
+            </div>
+
+            <div class="meta-section">
+               <div class="meta-title">Statystyki strony</div>
+               <div class="stats">
+                  <div class="stat-item">
+                     <div class="stat-label">Linki wewnętrzne</div>
+                     <div class="stat-value">${page.internalLinksCount}</div>
+                  </div>
+                  <div class="stat-item">
+                     <div class="stat-label">Linki zewnętrzne</div>
+                     <div class="stat-value">${page.externalLinksCount}</div>
+                  </div>
+               </div>
+            </div>
+         </div>`;
+         })
+         .join("")}
+   </div>
 </body>
 </html>
       `;
@@ -582,11 +921,11 @@ class SEOAnalyzer {
          console.log("Generowanie raportu PDF...");
          const browser = await puppeteer.launch();
          const page = await browser.newPage();
-         
+
          // Wczytaj wygenerowany raport HTML
          const htmlContent = fs.readFileSync("seo-report.html", "utf8");
          await page.setContent(htmlContent, {
-            waitUntil: "networkidle0"
+            waitUntil: "networkidle0",
          });
 
          // Generuj PDF
@@ -598,8 +937,8 @@ class SEOAnalyzer {
                top: "20px",
                right: "20px",
                bottom: "20px",
-               left: "20px"
-            }
+               left: "20px",
+            },
          });
 
          await browser.close();
@@ -618,6 +957,47 @@ class SEOAnalyzer {
       console.log(
          `Zakończono crawlowanie, odwiedzono ${this.visitedUrls.size} stron`
       );
+
+      // Zbieranie problemów
+      const issues = [];
+      
+      // Sprawdzanie tytułów
+      for (const [url, title] of this.pagesTitles.entries()) {
+         if (!title) {
+            issues.push(`Brak tytułu na stronie: ${url}`);
+         } else if (title.length < 30 || title.length > 60) {
+            issues.push(`Nieprawidłowa długość tytułu (${title.length} znaków) na stronie: ${url}`);
+         }
+      }
+
+      // Sprawdzanie opisów
+      for (const [url, description] of this.pagesDescriptions.entries()) {
+         if (!description) {
+            issues.push(`Brak meta opisu na stronie: ${url}`);
+         } else if (description.length < 120 || description.length > 160) {
+            issues.push(`Nieprawidłowa długość meta opisu (${description.length} znaków) na stronie: ${url}`);
+         }
+      }
+
+      // Sprawdzanie nagłówków H1
+      for (const [url, h1] of this.pagesH1.entries()) {
+         if (!h1) {
+            issues.push(`Brak nagłówka H1 na stronie: ${url}`);
+         }
+      }
+
+      // Sprawdzanie uszkodzonych linków
+      if (this.brokenLinks.length > 0) {
+         issues.push(`Znaleziono ${this.brokenLinks.length} uszkodzonych linków`);
+      }
+
+      // Sprawdzanie sitemap
+      if (this.urlsNotInSitemap.size > 0) {
+         issues.push(`${this.urlsNotInSitemap.size} stron nie jest w sitemap`);
+      }
+      if (this.urlsInSitemapButNotCrawled.size > 0) {
+         issues.push(`${this.urlsInSitemapButNotCrawled.size} stron z sitemap nie zostało scrawlowanych`);
+      }
 
       // Krok 2: Pobranie i analiza sitemap
       const sitemapXml = await this.fetchSitemap();
@@ -640,6 +1020,7 @@ class SEOAnalyzer {
       // Krok 4: Generowanie raportu
       console.log("Generowanie raportu...");
       const report = this.generateReport();
+      report.issues = issues; // Dodajemy zebrane problemy do raportu
       console.log(
          `Raport został wygenerowany. Zapisano do: seo-report.json i seo-report.html`
       );
@@ -661,7 +1042,9 @@ async function runAnalysis(url, maxDepth = 10) {
 
       const openaiApiKey = process.env.OPENAI_API_KEY;
       if (!openaiApiKey) {
-         console.error("Błąd: Brak klucza API OpenAI. Upewnij się, że plik .env zawiera OPENAI_API_KEY");
+         console.error(
+            "Błąd: Brak klucza API OpenAI. Upewnij się, że plik .env zawiera OPENAI_API_KEY"
+         );
          process.exit(1);
       }
 
