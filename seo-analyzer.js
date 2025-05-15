@@ -40,6 +40,30 @@ class SEOAnalyzer {
       this.pagesMetaTags = new Map();
       this.aiOptimizer = new SEOAIOptimizer(openaiApiKey);
       this.keywords = new Set(config.seo.keywords);
+      
+      // Inicjalizacja obiektu raportu
+      this.report = {
+         baseUrl: this.baseUrl,
+         dateGenerated: new Date().toISOString(),
+         issues: [],
+         aiSuggestions: {
+            mainKeywords: [],
+            longTailKeywords: [],
+            relatedTopics: [],
+            contentStructure: [],
+            seoSuggestions: [],
+            optimizedTitles: [],
+            optimizedDescriptions: [],
+            keywordSuggestions: new Set()
+         },
+         crawlStats: {
+            totalUrlsCrawled: 0,
+            totalStaticResources: 0,
+            brokenLinks: 0,
+            totalInternalLinks: 0,
+            totalExternalLinks: 0
+         }
+      };
    }
 
    getBaseUrl(inputUrl) {
@@ -269,6 +293,20 @@ class SEOAnalyzer {
             return null;
          }
 
+         // Aktualizujemy sugestie AI w raporcie
+         if (pageAnalysis) {
+            this.report.aiSuggestions = {
+               mainKeywords: pageAnalysis.mainKeywords || [],
+               longTailKeywords: pageAnalysis.longTailKeywords || [],
+               relatedTopics: pageAnalysis.relatedTopics || [],
+               contentStructure: pageAnalysis.contentStructure || [],
+               seoSuggestions: pageAnalysis.seoSuggestions || [],
+               optimizedTitles: [],
+               optimizedDescriptions: [],
+               keywordSuggestions: new Set()
+            };
+         }
+
          // Upewnij się, że metaTags istnieje
          if (!this.pagesMetaTags.has(url)) {
             this.pagesMetaTags.set(url, {});
@@ -436,64 +474,139 @@ class SEOAnalyzer {
    }
 
    generateReport() {
-      const report = {
-         baseUrl: this.baseUrl,
-         dateGenerated: new Date().toISOString(),
-         issues: [],
-         crawlStats: {
-            totalUrlsCrawled: this.visitedUrls.size,
-            totalStaticResources: this.staticResources.size,
-            brokenLinks: this.brokenLinks.length,
-            totalInternalLinks: [...this.internalLinks.values()].flat().length,
-            totalExternalLinks: [...this.externalLinks.values()].flat().length,
-            urlsWithoutTitle: [...this.visitedUrls].filter(
-               (url) => !this.pagesTitles.has(url)
-            ),
-            urlsWithoutDescription: [...this.visitedUrls].filter(
-               (url) => !this.pagesDescriptions.has(url)
-            ),
-            urlsWithoutH1: [...this.visitedUrls].filter(
-               (url) => !this.pagesH1.has(url)
-            ),
-            urlsWithInvalidTitleLength: this.pagesTitlesWarnings
-               ? [...this.pagesTitlesWarnings.entries()]
-               : [],
-            urlsWithInvalidDescriptionLength: this.pagesDescriptionsWarnings
-               ? [...this.pagesDescriptionsWarnings.entries()]
-               : [],
-         },
-         sitemapStats: {
-            totalUrlsInSitemap: this.sitemapUrls.size,
-            urlsNotInSitemap: [...this.urlsNotInSitemap],
-            urlsInSitemapButNotCrawled: [...this.urlsInSitemapButNotCrawled],
-         },
-         brokenLinks: this.brokenLinks,
-         pageMeta: [...this.visitedUrls].map((url) => ({
-            url,
-            status: this.statusCodes.get(url) || "unknown",
-            title: this.pagesTitles.get(url) || "",
-            titleLength: this.pagesTitles.get(url)?.length || 0,
-            description: this.pagesDescriptions.get(url) || "",
-            descriptionLength: this.pagesDescriptions.get(url)?.length || 0,
-            h1: this.pagesH1.get(url) || "",
-            internalLinksCount: (this.internalLinks.get(url) || []).length,
-            externalLinksCount: (this.externalLinks.get(url) || []).length,
-            metaTags: this.pagesMetaTags?.get(url) || {},
-         })),
-         staticResources: [...this.staticResources].map((url) => ({
-            url,
-            type: url.split(".").pop().toLowerCase(),
-            status: this.statusCodes.get(url) || "unknown",
-         })),
+      // Aktualizujemy statystyki w raporcie
+      this.report.crawlStats = {
+         totalUrlsCrawled: this.visitedUrls.size,
+         totalStaticResources: this.staticResources.size,
+         brokenLinks: this.brokenLinks.length,
+         totalInternalLinks: [...this.internalLinks.values()].flat().length,
+         totalExternalLinks: [...this.externalLinks.values()].flat().length,
+         urlsWithoutTitle: [...this.visitedUrls].filter(
+            (url) => !this.pagesTitles.has(url)
+         ),
+         urlsWithoutDescription: [...this.visitedUrls].filter(
+            (url) => !this.pagesDescriptions.has(url)
+         ),
+         urlsWithoutH1: [...this.visitedUrls].filter(
+            (url) => !this.pagesH1.has(url)
+         ),
+         urlsWithInvalidTitleLength: this.pagesTitlesWarnings
+            ? [...this.pagesTitlesWarnings.entries()]
+            : [],
+         urlsWithInvalidDescriptionLength: this.pagesDescriptionsWarnings
+            ? [...this.pagesDescriptionsWarnings.entries()]
+            : [],
       };
 
-      const reportJson = JSON.stringify(report, null, 2);
+      // Agregujemy sugestie AI ze wszystkich stron
+      const allAiSuggestions = {
+         mainKeywords: new Set(),
+         longTailKeywords: new Set(),
+         relatedTopics: new Set(),
+         contentStructure: new Set(),
+         seoSuggestions: new Set(),
+         optimizedTitles: [],
+         optimizedDescriptions: [],
+         keywordSuggestions: new Set()
+      };
+
+      // Zbieramy sugestie AI ze wszystkich stron
+      for (const [url, metaTags] of this.pagesMetaTags.entries()) {
+         if (metaTags.aiSuggestions) {
+            if (metaTags.aiSuggestions.optimizedTitle) {
+               allAiSuggestions.optimizedTitles.push({
+                  url,
+                  title: metaTags.aiSuggestions.optimizedTitle
+               });
+            }
+            if (metaTags.aiSuggestions.optimizedDescription) {
+               allAiSuggestions.optimizedDescriptions.push({
+                  url,
+                  description: metaTags.aiSuggestions.optimizedDescription
+               });
+            }
+            if (metaTags.aiSuggestions.keywordSuggestions) {
+               metaTags.aiSuggestions.keywordSuggestions.forEach(kw => 
+                  allAiSuggestions.keywordSuggestions.add(kw)
+               );
+            }
+         }
+         if (metaTags.contentAnalysis) {
+            if (metaTags.contentAnalysis.mainKeywords) {
+               metaTags.contentAnalysis.mainKeywords.forEach(kw => 
+                  allAiSuggestions.mainKeywords.add(kw)
+               );
+            }
+            if (metaTags.contentAnalysis.longTailKeywords) {
+               metaTags.contentAnalysis.longTailKeywords.forEach(kw => 
+                  allAiSuggestions.longTailKeywords.add(kw)
+               );
+            }
+            if (metaTags.contentAnalysis.relatedTopics) {
+               metaTags.contentAnalysis.relatedTopics.forEach(topic => 
+                  allAiSuggestions.relatedTopics.add(topic)
+               );
+            }
+            if (metaTags.contentAnalysis.contentStructure) {
+               metaTags.contentAnalysis.contentStructure.forEach(structure => 
+                  allAiSuggestions.contentStructure.add(structure)
+               );
+            }
+            if (metaTags.contentAnalysis.seoSuggestions) {
+               metaTags.contentAnalysis.seoSuggestions.forEach(suggestion => 
+                  allAiSuggestions.seoSuggestions.add(suggestion)
+               );
+            }
+         }
+      }
+
+      // Konwertujemy Set na Array i aktualizujemy raport
+      this.report.aiSuggestions = {
+         mainKeywords: [...allAiSuggestions.mainKeywords],
+         longTailKeywords: [...allAiSuggestions.longTailKeywords],
+         relatedTopics: [...allAiSuggestions.relatedTopics],
+         contentStructure: [...allAiSuggestions.contentStructure],
+         seoSuggestions: [...allAiSuggestions.seoSuggestions],
+         optimizedTitles: allAiSuggestions.optimizedTitles,
+         optimizedDescriptions: allAiSuggestions.optimizedDescriptions,
+         keywordSuggestions: [...allAiSuggestions.keywordSuggestions]
+      };
+
+      // Dodajemy pozostałe sekcje do raportu
+      this.report.sitemapStats = {
+         totalUrlsInSitemap: this.sitemapUrls.size,
+         urlsNotInSitemap: [...this.urlsNotInSitemap],
+         urlsInSitemapButNotCrawled: [...this.urlsInSitemapButNotCrawled],
+      };
+
+      this.report.brokenLinks = this.brokenLinks;
+      this.report.pageMeta = [...this.visitedUrls].map((url) => ({
+         url,
+         status: this.statusCodes.get(url) || "unknown",
+         title: this.pagesTitles.get(url) || "",
+         titleLength: this.pagesTitles.get(url)?.length || 0,
+         description: this.pagesDescriptions.get(url) || "",
+         descriptionLength: this.pagesDescriptions.get(url)?.length || 0,
+         h1: this.pagesH1.get(url) || "",
+         internalLinksCount: (this.internalLinks.get(url) || []).length,
+         externalLinksCount: (this.externalLinks.get(url) || []).length,
+         metaTags: this.pagesMetaTags?.get(url) || {},
+      }));
+
+      this.report.staticResources = [...this.staticResources].map((url) => ({
+         url,
+         type: url.split(".").pop().toLowerCase(),
+         status: this.statusCodes.get(url) || "unknown",
+      }));
+
+      // Zapisujemy raport do pliku JSON
+      const reportJson = JSON.stringify(this.report, null, 2);
       fs.writeFileSync("seo-report.json", reportJson);
 
-      // Generuj również raport HTML
-      this.generateHtmlReport(report);
+      // Generujemy raport HTML
+      this.generateHtmlReport(this.report);
 
-      return report;
+      return this.report;
    }
 
    analyzeKeywords(text) {
@@ -675,12 +788,139 @@ class SEOAnalyzer {
             width: 100%;
          }
       }
+      .ai-section {
+         background: #f8f9fa;
+         padding: 20px;
+         margin: 20px 0;
+         border-radius: 8px;
+         border: 1px solid #e9ecef;
+      }
+      .ai-section h3 {
+         color: #2c3e50;
+         margin-top: 0;
+      }
+      .keyword-list {
+         display: flex;
+         flex-wrap: wrap;
+         gap: 10px;
+         margin: 10px 0;
+      }
+      .keyword-item {
+         background: #e9ecef;
+         padding: 5px 10px;
+         border-radius: 15px;
+         font-size: 0.9em;
+      }
+      .suggestion-list {
+         list-style-type: none;
+         padding: 0;
+      }
+      .suggestion-item {
+         padding: 10px;
+         margin: 5px 0;
+         background: #fff;
+         border-radius: 4px;
+         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      }
+      .optimized-content {
+         background: #e8f4f8;
+         padding: 15px;
+         margin: 10px 0;
+         border-radius: 6px;
+      }
+      .optimized-content h4 {
+         margin: 0 0 10px 0;
+         color: #2c3e50;
+      }
+      .url-link {
+         color: #666;
+         font-size: 0.9em;
+         margin-bottom: 5px;
+      }
    </style>
 </head>
 <body>
    <div class="container">
       <h1>Raport SEO</h1>
       
+      <div class="ai-section">
+         <h3>Sugestie AI</h3>
+         
+         <div class="meta-section">
+            <h4>Zoptymalizowane tytuły</h4>
+            ${report.aiSuggestions.optimizedTitles.map(item => `
+               <div class="optimized-content">
+                  <div class="url-link">URL: ${item.url}</div>
+                  <div>${item.title}</div>
+               </div>
+            `).join('')}
+         </div>
+
+         <div class="meta-section">
+            <h4>Zoptymalizowane opisy</h4>
+            ${report.aiSuggestions.optimizedDescriptions.map(item => `
+               <div class="optimized-content">
+                  <div class="url-link">URL: ${item.url}</div>
+                  <div>${item.description}</div>
+               </div>
+            `).join('')}
+         </div>
+
+         <div class="meta-section">
+            <h4>Główne słowa kluczowe</h4>
+            <div class="keyword-list">
+               ${report.aiSuggestions.mainKeywords.map(keyword => 
+                  `<span class="keyword-item">${keyword}</span>`
+               ).join('')}
+            </div>
+         </div>
+
+         <div class="meta-section">
+            <h4>Słowa kluczowe długiego ogona</h4>
+            <div class="keyword-list">
+               ${report.aiSuggestions.longTailKeywords.map(keyword => 
+                  `<span class="keyword-item">${keyword}</span>`
+               ).join('')}
+            </div>
+         </div>
+
+         <div class="meta-section">
+            <h4>Powiązane tematy</h4>
+            <div class="keyword-list">
+               ${report.aiSuggestions.relatedTopics.map(topic => 
+                  `<span class="keyword-item">${topic}</span>`
+               ).join('')}
+            </div>
+         </div>
+
+         <div class="meta-section">
+            <h4>Sugerowana struktura treści</h4>
+            <ul class="suggestion-list">
+               ${report.aiSuggestions.contentStructure.map(structure => 
+                  `<li class="suggestion-item">${structure}</li>`
+               ).join('')}
+            </ul>
+         </div>
+
+         <div class="meta-section">
+            <h4>Sugestie SEO</h4>
+            <ul class="suggestion-list">
+               ${report.aiSuggestions.seoSuggestions.map(suggestion => 
+                  `<li class="suggestion-item">${suggestion}</li>`
+               ).join('')}
+            </ul>
+         </div>
+
+         <div class="meta-section">
+            <h4>Sugerowane słowa kluczowe</h4>
+            <div class="keyword-list">
+               ${report.aiSuggestions.keywordSuggestions.map(keyword => 
+                  `<span class="keyword-item">${keyword}</span>`
+               ).join('')}
+            </div>
+         </div>
+      </div>
+
       <div class="summary">
          <h2>Podsumowanie</h2>
          <div class="stats">
